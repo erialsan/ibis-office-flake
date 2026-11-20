@@ -1,0 +1,90 @@
+name: Check for a new ibisOffice release
+
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ibis-office-release-update
+
+jobs:
+  check:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      release: ${{ steps.prefetch.outputs.release }}
+      tag: ${{ steps.latest.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Detect a newer stable release
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh api repos/ibisjp/ibis-office/releases/latest --jq .tag_name)
+          if [[ ! $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'Unsupported release tag format' >&2
+            exit 1
+          fi
+          latest=${tag#v}
+          current=$(jq -er .version release.json)
+          if [[ $latest != "$current" && $(printf '%s\n' "$current" "$latest" | sort -V | tail -n1) == "$latest" ]]; then
+            printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        if: steps.latest.outputs.tag != ''
+        with:
+          enable_kvm: false
+      - name: Compute the Nix source and Cargo hashes
+        id: prefetch
+        if: steps.latest.outputs.tag != ''
+        env:
+          TAG: ${{ steps.latest.outputs.tag }}
+        run: |
+          release=$(bash scripts/update-release.sh "$TAG" | jq -ce .)
+          printf 'release=%s\n' "$release" >> "$GITHUB_OUTPUT"
+
+  open-pr:
+    needs: check
+    if: needs.check.outputs.release != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Update the release manifest
+        env:
+          RELEASE: ${{ needs.check.outputs.release }}
+        run: |
+          current=$(jq -er .version release.json)
+          latest=$(jq -er .version <<< "$RELEASE")
+          if [[ $latest != "$current" && $(printf '%s\n' "$current" "$latest" | sort -V | tail -n1) == "$latest" ]]; then
+            jq . <<< "$RELEASE" > release.json
+          fi
+      - uses: peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1 # v8.1.3
+        with:
+          token: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
+          branch: automation/ibis-office-release
+          delete-branch: true
+          add-paths: release.json
+          commit-message: Update ibisOffice to ${{ needs.check.outputs.tag }}
+          title: Update ibisOffice to ${{ needs.check.outputs.tag }}
+          body: |
+            Updates the pinned ibisOffice source and Cargo hashes for [${{ needs.check.outputs.tag }}](https://github.com/ibisjp/ibis-office/releases/tag/${{ needs.check.outputs.tag }}).
+            Review the upstream changes and require a successful build before merging.
