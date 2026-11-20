@@ -1,0 +1,56 @@
+name: Build ibisOffice
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    if: >-
+      github.event_name != 'push' ||
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      CACHIX_CACHE_NAME: ${{ vars.CACHIX_CACHE_NAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          enable_kvm: false
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        if: env.CACHIX_CACHE_NAME != ''
+        with:
+          name: ${{ env.CACHIX_CACHE_NAME }}
+          skipPush: true
+      - name: Build and smoke-test
+        run: |
+          nix build --no-write-lock-file --print-build-logs .#ibis-office
+          version=$(jq -er .version release.json)
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server/discover"}' |
+            result/bin/ibisOffice --mcp --read-only |
+            jq -e --arg version "$version" '.result.serverInfo == {name: "ibisOffice", version: $version}'
+      - name: Push runtime closure to Cachix
+        if: >-
+          github.event_name != 'pull_request' &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+          env.CACHIX_CACHE_NAME != ''
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: |
+          : "${CACHIX_AUTH_TOKEN:?Set the CACHIX_AUTH_TOKEN Actions secret}"
+          cachix push "$CACHIX_CACHE_NAME" "$(readlink -f result)"
