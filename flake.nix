@@ -10,7 +10,13 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          ibis-office = pkgs.callPackage ./package.nix { };
+          ibis-office = pkgs.callPackage ./package.nix {
+            rustPlatform = pkgs.rustPlatform // {
+              buildRustPackage = pkgs.rustPlatform.buildRustPackage.override {
+                stdenv = pkgs.useMoldLinker pkgs.stdenv;
+              };
+            };
+          };
         in
         {
           inherit ibis-office;
