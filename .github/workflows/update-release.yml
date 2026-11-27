@@ -42,7 +42,7 @@ jobs:
           if [[ $latest != "$current" && $(printf '%s\n' "$current" "$latest" | sort -V | tail -n1) == "$latest" ]]; then
             printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
           fi
-      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - uses: cachix/install-nix-action@382a9ed9481c7c1f94f68b72ef105b3417c73877 # v32.1.0
         if: steps.latest.outputs.tag != ''
         with:
           enable_kvm: false
